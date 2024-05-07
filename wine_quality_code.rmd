@@ -1,0 +1,314 @@
+---
+title: "STAT_PROJ"
+output: pdf_document
+date: "2023-12-07"
+---
+
+```{r echo=FALSE}
+library(tidyverse)
+library(pROC)
+library(caret)
+library(glmnet)
+library(randomForest)
+library(cluster)
+library(ggcorrplot)
+library(dplyr)
+library(titanic)
+library(dataPreparation)
+library(MASS)
+set.seed(66)
+```
+
+### LOADING DATASET
+
+```{r echo=FALSE}
+wine <- read.csv("C:/Users/UTENTE/Downloads/WineQuality.csv")
+wine <- subset(wine, select = -Id)
+```
+
+### DATA SET CHECK
+
+```{r echo=FALSE}
+sum(is.na(wine))
+sum(duplicated(wine))
+```
+
+```{r echo=FALSE}
+wine <- na.omit(wine)
+wine <- unique(wine)
+```
+
+### CHECKING THE DATA DISTRIBUTIONS
+
+```{r echo=FALSE}
+wine %>%
+  select_if(is.numeric) %>% 
+  gather() %>% 
+  ggplot(aes(value)) +
+  facet_wrap(~key, scales = "free")+
+  geom_boxplot(fill = "steelblue")
+```
+
+```{r echo=FALSE}
+wine <- remove_percentile_outlier(wine)
+```
+
+```{r echo=FALSE}
+wine %>%
+   select_if(is.numeric) %>% 
+  gather() %>% 
+  ggplot(aes(value)) +
+  facet_wrap(~key, scales = "free")+
+  geom_boxplot(fill = "steelblue")
+
+wine %>% 
+  select_if(is.numeric) %>% 
+  gather() %>% 
+  ggplot(aes(value)) +
+  facet_wrap(~key, scales="free") + 
+  geom_density()
+```
+
+```{r}
+wine <- wine %>%
+  mutate(across(c(chlorides, fixed.acidity, residual.sugar, volatile.acidity, sulphates, free.sulfur.dioxide),function(x)log10(x)))
+
+wine %>% 
+  select_if(is.numeric) %>% 
+  gather() %>% 
+  ggplot(aes(value)) +
+  facet_wrap(~key, scales="free") + 
+  geom_density()
+```
+
+### CLASSIFICATION
+
+```{r echo=FALSE}
+
+quality = wine %>%
+  cut(x = wine$quality,
+      breaks = c(min(wine$quality),5,max(wine$quality)),
+      labels = c("Bad", "Good"),
+      include.lowest = T,
+      right = T)
+```
+
+```{r}
+table(quality)
+wine$quality = quality
+
+wine %>%
+    select_if(is.numeric) %>%
+    cor() %>%
+    ggcorrplot(lab = TRUE, legend.title = 'Correlation',lab_size=2, method="circle")
+
+
+wine <- wine %>% 
+  mutate_at(c(1:11), funs(c(scale(.))))
+```
+
+### SPLITTING DATA (TRAIN - TEST)
+
+```{r}
+n <- nrow(wine)
+train_size <- round(n * 0.7)
+
+train_indices <- sample(n, train_size)
+
+wine.train <- wine[train_indices, ]
+wine.test <- wine[-train_indices, ]
+```
+
+## LOGISTIC REGRESSION
+
+```{r}
+glm.fits <- glm(quality ~ ., data = wine.train, family = binomial)
+summary(glm.fits)
+```
+
+#### CONFUSION MATRIX
+
+```{r}
+#train set
+glm.probs.train <- predict(glm.fits, wine.train, type = "response")
+glm.pred.train <- rep("Bad", 3336)
+glm.pred.train[glm.probs.train > .60] <- "Good"
+conf_matrix_train <- table(Actual = wine.train$quality, Predicted = glm.pred.train)
+accuracy_train <- mean(glm.pred.train == wine.train$quality)
+print(paste("Accuracy on the train set is: ", accuracy_train))
+
+#test set
+glm.probs.test <- predict(glm.fits, wine.test, type = "response")
+glm.pred.test <- rep("Bad", 1429)
+glm.pred.test[glm.probs.test > .60] <- "Good"
+conf_matrix_test <- table(Actual = wine.test$quality, Predicted = glm.pred.test)
+accuracy_test <- mean(glm.pred.test == wine.test$quality)
+print(paste("Accuracy on the test set is: ", accuracy_test))
+```
+
+#### SPECIFICITY AND SENSITIVITY
+
+```{r}
+#sensitivity and specificity for train set
+sensitivity_train <- conf_matrix_train[2, 2] / (conf_matrix_train[2, 2] + conf_matrix_train[2, 1])
+specificity_train <- conf_matrix_train[1, 1] / (conf_matrix_train[1, 1] + conf_matrix_train[1, 2])
+print(paste("Training Sensitivity:", sensitivity_train))
+print(paste("Training Specificity:", specificity_train))
+
+
+#sensitivity and specificity for test set
+sensitivity_test <- conf_matrix_test[2, 2] / (conf_matrix_test[2, 2] + conf_matrix_test[2, 1])
+specificity_test <- conf_matrix_test[1, 1] / (conf_matrix_test[1, 1] + conf_matrix_test[1, 2])
+print(paste("Test Sensitivity:", sensitivity_test))
+print(paste("Test Specificity:", specificity_test))
+```
+
+### FORWARDS SELECTION --\> NEW LOGISTIC MODEL
+
+```{r}
+
+# Assuming 'outcome' is your binary dependent variable and 'data' is your dataframe
+null_model <- glm(quality ~ 1, data = wine.train, family = binomial())
+glm.fits2 <- stepAIC(null_model, scope = list(lower = null_model, upper = glm(quality ~ ., data = wine, family = binomial())), direction = "forward")
+summary(glm.fits2)
+stepAIC
+```
+
+#### CONFUSION MATRIX - SENSITIVITY SPRECIFICITY
+
+```{r}
+#train set
+glm.probs.train <- predict(glm.fits, wine.train, type = "response")
+glm.pred.train <- rep("Bad", 3336)
+glm.pred.train[glm.probs.train > .60] <- "Good"
+conf_matrix_train <- table(Actual = wine.train$quality, Predicted = glm.pred.train)
+accuracy_train <- mean(glm.pred.train == wine.train$quality)
+print(paste("Accuracy on the train set is: ", accuracy_train))
+
+#test set
+glm.probs.test <- predict(glm.fits, wine.test, type = "response")
+glm.pred.test <- rep("Bad", 1429)
+glm.pred.test[glm.probs.test > .60] <- "Good"
+conf_matrix_test <- table(Actual = wine.test$quality, Predicted = glm.pred.test)
+accuracy_test <- mean(glm.pred.test == wine.test$quality)
+print(paste("Accuracy on the test set is: ", accuracy_test))
+
+#sensitivity and specificity for train set
+sensitivity_train <- conf_matrix_train[2, 2] / (conf_matrix_train[2, 2] + conf_matrix_train[2, 1])
+specificity_train <- conf_matrix_train[1, 1] / (conf_matrix_train[1, 1] + conf_matrix_train[1, 2])
+print(paste("Training Sensitivity:", sensitivity_train))
+print(paste("Training Specificity:", specificity_train))
+
+
+#sensitivity and specificity for test set
+sensitivity_test <- conf_matrix_test[2, 2] / (conf_matrix_test[2, 2] + conf_matrix_test[2, 1])
+specificity_test <- conf_matrix_test[1, 1] / (conf_matrix_test[1, 1] + conf_matrix_test[1, 2])
+print(paste("Test Sensitivity:", sensitivity_test))
+print(paste("Test Specificity:", specificity_test))
+```
+
+### ROC CURVE & AUC
+
+```{r echo=FALSE}
+roc1 = roc(
+  response = wine.test$quality,
+  predictor = glm.probs.test,
+  auc = T,
+)
+
+plot(
+  roc1,
+  print.auc = T,
+  auc.polygon = T,
+  auc.polygon.col = 'lightblue'
+)
+threshold = sensitivity_test + specificity_test - 1
+print(threshold)
+```
+
+## RANDOM FOREST
+
+```{r}
+rf.fit <- randomForest(
+  quality ~ .,
+  data = wine.train,
+  ntree = 1000,
+  mtry = 3.3,
+  importance = T,
+)
+rf.fit
+
+rfPred <- rf.fit %>% 
+  predict(wine.test, type = 'class')
+
+rfProb<- rf.fit %>% 
+  predict(wine.test, type = 'prob')
+
+mean(rfPred == wine.test$quality)
+```
+
+```{r}
+rfProb <- rfProb[, 1]
+
+roc3 = roc(
+  response = wine.test$quality,
+  predictor = rfProb,
+  auc = T,
+  col = 'green'
+)
+
+plot(
+  roc3,
+  print.auc = T,
+  auc.polygon = T,
+  auc.polygon.col = 'yellow'
+) 
+```
+
+## LASSO REGRESSION
+
+```{r}
+x =  model.matrix(quality~., wine.train)[, -9]
+y = ifelse(wine.train$quality == 'Good', 1, 0)
+
+cv.lasso <- cv.glmnet(x,y,
+                     family = 'binomial',
+                     alpha = 1)
+
+lambda = cv.lasso$lambda.min
+cv.lasso$lambda.min
+
+lasso.fit = glmnet(x,y,
+                   family = 'binomial',
+                   alpha = 1,
+                   lambda = lambda)
+
+coef(lasso.fit)
+
+xtest <- model.matrix(quality~., wine.test) [, -9]
+
+probabilities <- lasso.fit %>% 
+  predict(newx = xtest)
+
+ytest <- ifelse(probabilities > 0.5, "Good", "Bad")
+
+table(ytest, wine.test$quality)
+
+mean(ytest == wine.test$quality)
+```
+
+```{r echo=FALSE}
+roc2 = roc(
+  response = wine.test$quality,
+  predictor = probabilities,
+  auc = T,
+  col = 'green'
+)
+
+plot(
+  roc2,
+  print.auc = T,
+  auc.polygon = T,
+  auc.polygon.col = 'lightgreen')
+
+```
